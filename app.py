@@ -3,8 +3,6 @@ from werkzeug.utils import secure_filename
 import os
 import json
 from langchain_ollama import OllamaEmbeddings
-from weaviate.connect import ConnectionParams
-from weaviate.auth import AuthApiKey  
 from config import (
     WEAVIATE_REST_URL,
     WEAVIATE_GRPC_URL,
