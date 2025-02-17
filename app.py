@@ -3,7 +3,6 @@ from werkzeug.utils import secure_filename
 import os
 import json
 from langchain_ollama import OllamaEmbeddings
-import weaviate
 from weaviate.connect import ConnectionParams
 from weaviate.auth import AuthApiKey  
 from config import (
@@ -17,34 +16,25 @@ from config import (
     ALLOWED_EXTENSIONS
 )
 from tasks import process_document
-import certifi
 import logging
-import flask
+from utils import FileHandler, WeaviateHelper, logger
+from pathlib import Path
 
 app = Flask(__name__)
 
 # Configure upload folder
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Initialize connection parameters
-connection_params = ConnectionParams.from_params(
-    http_host=WEAVIATE_REST_URL,
-    http_port=8080,
-    http_secure=True,
-    grpc_host=WEAVIATE_GRPC_URL,
-    grpc_port=50051,
-    grpc_secure=True
+# Initialize Weaviate client
+client = WeaviateHelper.initialize_client(
+    rest_url=WEAVIATE_REST_URL,
+    grpc_url=WEAVIATE_GRPC_URL,
+    client_name=WEAVIATE_CLIENT_NAME,
+    api_key=WEAVIATE_ADMIN_API_KEY
 )
 
-auth_config = AuthApiKey(api_key=WEAVIATE_ADMIN_API_KEY)
-
-client = weaviate.WeaviateClient(
-    connection_params=connection_params,
-    auth_client_secret=auth_config,
-    additional_headers={
-        "X-Weaviate-Client-Name": WEAVIATE_CLIENT_NAME
-    }
-)
+if client is None:
+    raise Exception("Failed to initialize Weaviate client")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -54,24 +44,16 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def check_weaviate_connection():
-    try:
-        client.is_ready()
-        print("Successfully connected to Weaviate!")
-        return True
-    except Exception as e:
-        print(f"Failed to connect to Weaviate: {str(e)}")
-        return False
+    return WeaviateHelper.check_connection(client)
 
-# Replace @app.before_first_request with this
 def initialize_app():
     if not check_weaviate_connection():
         raise Exception("Could not connect to Weaviate")
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Call initialize_app at startup
 initialize_app()
 
-# Add this to ensure initialization happens before first request
+
 @app.before_request
 def before_request():
     if not os.path.exists(UPLOAD_FOLDER):
@@ -86,17 +68,17 @@ def ingest_document():
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
     
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
+    if file and FileHandler.allowed_file(file.filename, ALLOWED_EXTENSIONS):
+        file_path = FileHandler.secure_file_save(file, app.config['UPLOAD_FOLDER'])
+        if not file_path:
+            return jsonify({'error': 'Error saving file'}), 500
         
         # Queue the document for processing
         task = process_document.delay(file_path)
         
         return jsonify({
             'message': 'Document uploaded successfully and queued for processing',
-            'filename': filename,
+            'filename': Path(file_path).name,
             'task_id': task.id
         }), 200
     
@@ -153,7 +135,6 @@ def query_document():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# Modify the health check endpoint to be more informative
 @app.route('/health', methods=['GET'])
 def health_check():
     # Create upload folder if it doesn't exist
@@ -167,7 +148,6 @@ def health_check():
         'status': 'healthy'
     }), 200
 
-# Modify the main block to handle SSL properly
 if __name__ == '__main__':
     port = 5000
     host = '0.0.0.0'
@@ -183,5 +163,5 @@ if __name__ == '__main__':
         host=host, 
         port=port, 
         debug=True,
-        ssl_context=None  # Explicitly disable SSL for development
+        ssl_context=None
     ) 

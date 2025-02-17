@@ -10,7 +10,7 @@ load_dotenv()
 WEAVIATE_REST_URL = os.getenv('WEAVIATE_REST_URL')
 WEAVIATE_GRPC_URL = os.getenv('WEAVIATE_GRPC_URL')
 WEAVIATE_CLIENT_NAME = os.getenv('WEAVIATE_CLIENT_NAME')
-WEAVIATE_GRPC_PORT = 50051  # or whatever port your Weaviate gRPC is running on
+WEAVIATE_GRPC_PORT = 50051
 WEAVIATE_ADMIN_API_KEY = os.getenv('WEAVIATE_ADMIN_API_KEY')
 
 # Ollama Configuration
