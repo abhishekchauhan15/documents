@@ -7,22 +7,33 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import weaviate
 import docx
 import PyPDF2
+from config import (
+    WEAVIATE_REST_URL,
+    WEAVIATE_CLIENT_NAME,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    UPLOAD_FOLDER,
+    ALLOWED_EXTENSIONS
+)
 
 app = Flask(__name__)
 
 # Configure upload folder and allowed extensions
-UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'pdf', 'docx', 'json', 'txt'}
-
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Initialize Weaviate client
 client = weaviate.Client(
-    url="http://localhost:8080"  # Update with your Weaviate instance URL
+    url=WEAVIATE_REST_URL,
+    additional_headers={
+        "X-Weaviate-Client-Name": WEAVIATE_CLIENT_NAME
+    }
 )
 
 # Initialize Ollama embeddings
-embeddings = OllamaEmbeddings(model="llama2")
+embeddings = OllamaEmbeddings(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_BASE_URL
+)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -59,6 +70,19 @@ def read_file_content(file_path):
     elif file_extension == 'docx':
         doc = docx.Document(file_path)
         return ' '.join([paragraph.text for paragraph in doc.paragraphs])
+
+def check_weaviate_connection():
+    try:
+        client.schema.get()
+        return True
+    except Exception as e:
+        print(f"Failed to connect to Weaviate: {str(e)}")
+        return False
+
+@app.before_first_request
+def initialize():
+    if not check_weaviate_connection():
+        raise Exception("Could not connect to Weaviate")
 
 @app.route('/ingest', methods=['POST'])
 def ingest_document():
@@ -104,39 +128,6 @@ def ingest_document():
         
     return jsonify({'error': 'Invalid file type'}), 400
 
-@app.route('/query', methods=['POST'])
-def query_document():
-    data = request.json
-    if not data or 'query' not in data or 'document_name' not in data:
-        return jsonify({'error': 'Missing query or document name'}), 400
-    
-    query = data['query']
-    document_name = data['document_name']
-    
-    try:
-        # Generate embedding for the query
-        query_embedding = embeddings.embed_query(query)
-        
-        # Search in Weaviate
-        response = client.query.get(
-            "Document",
-            ["content", "source", "chunk_index"]
-        ).with_where({
-            "path": ["source"],
-            "operator": "Equal",
-            "valueString": document_name
-        }).with_near_vector({
-            "vector": query_embedding
-        }).with_limit(3).do()
-        
-        results = response['data']['Get']['Document']
-        
-        return jsonify({
-            'results': results
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)

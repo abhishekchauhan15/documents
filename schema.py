@@ -1,7 +1,11 @@
 import weaviate
+from config import WEAVIATE_REST_URL, WEAVIATE_CLIENT_NAME
 
 client = weaviate.Client(
-    url="http://localhost:8080"  # Update with your Weaviate instance URL
+    url=WEAVIATE_REST_URL,
+    additional_headers={
+        "X-Weaviate-Client-Name": WEAVIATE_CLIENT_NAME
+    }
 )
 
 class_obj = {
