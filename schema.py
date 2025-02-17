@@ -5,7 +5,8 @@ client = weaviate.Client(
     url=WEAVIATE_REST_URL,
     additional_headers={
         "X-Weaviate-Client-Name": WEAVIATE_CLIENT_NAME
-    }
+    },
+    trust_env=True
 )
 
 class_obj = {
