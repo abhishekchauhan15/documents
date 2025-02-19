@@ -35,6 +35,22 @@ class_obj = {
         {
             "name": "chunk_index",
             "dataType": ["int"]
+        },
+        {
+            "name": "page_number",
+            "dataType": ["int"]
+        },
+        {
+            "name": "timestamp",
+            "dataType": ["date"]
+        },
+        {
+            "name": "file_type",
+            "dataType": ["string"]
+        },
+        {
+            "name": "metadata",
+            "dataType": ["object"]
         }
     ]
 }

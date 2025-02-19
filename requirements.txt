@@ -2,9 +2,10 @@ flask
 celery
 redis
 python-dotenv
-weaviate-client
+weaviate-client>=4.0.0
 langchain
 langchain-ollama
+llama-index
 pypdf
 python-docx
 werkzeug

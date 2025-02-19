@@ -15,8 +15,9 @@ from config import (
 )
 from tasks import process_document
 import logging
-from utils import FileHandler, WeaviateHelper, logger
+from utils import FileHandler, WeaviateHelper, logger, IndexingHelper
 from pathlib import Path
+from sklearn.metrics.pairwise import cosine_similarity
 
 app = Flask(__name__)
 
@@ -95,55 +96,65 @@ def get_task_status(task_id):
 
 @app.route('/query', methods=['POST'])
 def query_document():
-    """Query specific document and get relevant snippets"""
     data = request.json
     if not data or 'query' not in data or 'document_name' not in data:
         return jsonify({'error': 'Missing query or document_name'}), 400
     
     query = data['query']
     document_name = data['document_name']
-    limit = data.get('limit', 3)  # Number of results to return
+    limit = data.get('limit', 3)
     
     try:
-        # Initialize embeddings
+        # Initialize components
         embeddings = OllamaEmbeddings(
             model=OLLAMA_MODEL,
             base_url=OLLAMA_BASE_URL
         )
+        indexer = IndexingHelper(REDIS_URL)
+        indexer.initialize_components(embeddings, client)
         
-        # Generate query embedding
-        query_embedding = embeddings.embed_query(query)
-        
-        # Search in Weaviate
-        response = client.query.get(
-            "Document",
-            ["content", "source", "chunk_index"]
-        ).with_where({
-            "path": ["source"],
-            "operator": "Equal",
-            "valueString": document_name
-        }).with_near_vector({
-            "vector": query_embedding
-        }).with_limit(limit).with_additional(["distance", "id"]).do()
-        
-        results = response['data']['Get']['Document']
-        
-        # Format results
-        formatted_results = [{
-            'content': r['content'],
-            'chunk_index': r['chunk_index'],
-            'source': r['source'],
-            'document_id': r['_additional']['id'],
-            'relevance_score': 1 - r['_additional']['distance']  # Convert distance to similarity score
-        } for r in results]
+        # Query using LlamaIndex
+        results = indexer.query_document(
+            query=query,
+            document_name=document_name,
+            limit=limit
+        )
         
         return jsonify({
             'query': query,
             'document': document_name,
             'model': OLLAMA_MODEL,
-            'results': formatted_results,
-            'total_chunks': len(formatted_results)
+            'results': results,
+            'total_chunks': len(results)
         }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/query/json', methods=['POST'])
+def query_json_document():
+    data = request.json
+    if not data or 'document_name' not in data:
+        return jsonify({'error': 'Missing document_name'}), 400
+    
+    document_name = data['document_name']
+    
+    try:
+        # Initialize components
+        embeddings = OllamaEmbeddings(
+            model=OLLAMA_MODEL,
+            base_url=OLLAMA_BASE_URL
+        )
+        indexer = IndexingHelper(REDIS_URL)
+        indexer.initialize_components(embeddings, client)
+        
+        # Query using JSON helper
+        results = indexer.query_json_document(
+            query=data,
+            document_name=document_name
+        )
+        
+        return jsonify(results), 200
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500

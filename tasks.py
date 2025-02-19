@@ -15,7 +15,7 @@ from config import (
 )
 from langchain_ollama import OllamaEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from utils import FileHandler, WeaviateHelper, TimeTracker, logger
+from utils import FileHandler, WeaviateHelper, TimeTracker, logger, IndexingHelper
 
 # Initialize Celery
 celery_app = Celery('tasks', broker=REDIS_URL, backend=REDIS_URL)
@@ -58,49 +58,16 @@ class DocumentProcessor:
             model=OLLAMA_MODEL,
             base_url=OLLAMA_BASE_URL
         )
-        self.file_handler = FileHandler()
-    
-    def process_text(self, text):
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE,
-            chunk_overlap=CHUNK_OVERLAP,
-            length_function=len
-        )
-        return text_splitter.split_text(text)
+        self.indexer = IndexingHelper(REDIS_URL)
     
     @TimeTracker.track_time
     def process_document(self, file_path):
-        try:
-            logger.info(f"Started processing document: {file_path}")
-            
-            # Read content
-            content = self.file_handler.read_file_content(file_path)
-            if content is None:
-                return False
-            
-            # Split into chunks
-            chunks = self.process_text(content)
-            logger.info(f"Number of chunks: {len(chunks)}")
-            
-            # Process chunks in batches
-            batch_size = 50
-            with self.client.batch as batch:
-                batch.batch_size = batch_size
-                for i, chunk in enumerate(chunks):
-                    embedding = self.embeddings.embed_query(chunk)
-                    WeaviateHelper.store_document_chunk(
-                        batch=batch,
-                        chunk=chunk,
-                        embedding=embedding,
-                        source=Path(file_path).name,
-                        chunk_index=i
-                    )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error processing document {file_path}: {str(e)}")
-            return False
+        return self.indexer.process_document(
+            file_path=file_path,
+            weaviate_client=self.client,
+            embeddings=self.embeddings,
+            chunk_size=CHUNK_SIZE
+        )
 
 @celery_app.task(name='tasks.process_document')
 def process_document(file_path):
