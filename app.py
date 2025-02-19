@@ -95,21 +95,23 @@ def get_task_status(task_id):
 
 @app.route('/query', methods=['POST'])
 def query_document():
+    """Query specific document and get relevant snippets"""
     data = request.json
     if not data or 'query' not in data or 'document_name' not in data:
-        return jsonify({'error': 'Missing query or document name'}), 400
+        return jsonify({'error': 'Missing query or document_name'}), 400
     
     query = data['query']
     document_name = data['document_name']
+    limit = data.get('limit', 3)  # Number of results to return
     
     try:
-        # Initialize embeddings for query
+        # Initialize embeddings
         embeddings = OllamaEmbeddings(
             model=OLLAMA_MODEL,
             base_url=OLLAMA_BASE_URL
         )
         
-        # Generate embedding for the query
+        # Generate query embedding
         query_embedding = embeddings.embed_query(query)
         
         # Search in Weaviate
@@ -122,12 +124,25 @@ def query_document():
             "valueString": document_name
         }).with_near_vector({
             "vector": query_embedding
-        }).with_limit(3).do()
+        }).with_limit(limit).with_additional(["distance", "id"]).do()
         
         results = response['data']['Get']['Document']
         
+        # Format results
+        formatted_results = [{
+            'content': r['content'],
+            'chunk_index': r['chunk_index'],
+            'source': r['source'],
+            'document_id': r['_additional']['id'],
+            'relevance_score': 1 - r['_additional']['distance']  # Convert distance to similarity score
+        } for r in results]
+        
         return jsonify({
-            'results': results
+            'query': query,
+            'document': document_name,
+            'model': OLLAMA_MODEL,
+            'results': formatted_results,
+            'total_chunks': len(formatted_results)
         }), 200
         
     except Exception as e:
@@ -145,6 +160,46 @@ def health_check():
     return jsonify({
         'status': 'healthy'
     }), 200
+
+@app.route('/update/<document_name>', methods=['POST'])
+def update_document(document_name):
+    """Update is equivalent to re-uploading with changes"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    if file and FileHandler.allowed_file(file.filename, ALLOWED_EXTENSIONS):
+        # First, delete existing document chunks
+        try:
+            client.batch.delete_objects(
+                class_name="Document",
+                where={
+                    "path": ["source"],
+                    "operator": "Equal",
+                    "valueString": document_name
+                }
+            )
+            
+            # Then process new document
+            file_path = FileHandler.secure_file_save(file, app.config['UPLOAD_FOLDER'])
+            if not file_path:
+                return jsonify({'error': 'Error saving file'}), 500
+            
+            task = process_document.delay(file_path)
+            
+            return jsonify({
+                'message': 'Document update queued',
+                'filename': Path(file_path).name,
+                'task_id': task.id
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    return jsonify({'error': 'Invalid file type'}), 400
 
 if __name__ == '__main__':
     port = 5000
