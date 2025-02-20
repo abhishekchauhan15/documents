@@ -16,9 +16,14 @@ from config import (
 from langchain_ollama import OllamaEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from utils import FileHandler, WeaviateHelper, TimeTracker, logger, IndexingHelper
+from typing import Any, Optional, List
 
 # Initialize Celery
 celery_app = Celery('tasks', broker=REDIS_URL, backend=REDIS_URL)
+client = WeaviateHelper.get_client()
+
+if client is None:
+    raise Exception("Failed to initialize Weaviate client")
 
 # Celery Configuration
 celery_app.conf.update(
@@ -41,16 +46,11 @@ celery_app.conf.update(
 
 def get_utc_now():
     """Get current UTC time in a timezone-aware manner."""
-    return datetime.datetime.now(datetime.UTC)
+    return datetime.datetime.now(datetime.timezone.utc)
 
 class DocumentProcessor:
     def __init__(self):
-        self.client = WeaviateHelper.initialize_client(
-            rest_url=WEAVIATE_REST_URL,
-            grpc_url=WEAVIATE_GRPC_URL,
-            client_name=WEAVIATE_CLIENT_NAME,
-            api_key=WEAVIATE_ADMIN_API_KEY
-        )
+        self.client = WeaviateHelper.get_client()
         if self.client is None:
             raise Exception("Failed to initialize Weaviate client")
             
@@ -62,26 +62,56 @@ class DocumentProcessor:
     
     @TimeTracker.track_time
     def process_document(self, file_path):
+        logger.info(f"Processing document: {file_path}")
         return self.indexer.process_document(
             file_path=file_path,
             weaviate_client=self.client,
-            embeddings=self.embeddings,
+            embedding_model=self.embeddings,
             chunk_size=CHUNK_SIZE
         )
 
+    @staticmethod
+    def store_document_chunk(chunk: str, embedding: List[float], source: str, chunk_index: int) -> None:
+        """Store a document chunk in Weaviate."""
+        weaviate_client = WeaviateHelper.get_client()
+        
+        # Ensure the embedding is a flat list of floats
+        if isinstance(embedding, list) and all(isinstance(i, float) for i in embedding):
+            weaviate_client.data.create(
+                data={
+                    "content": chunk,
+                    "source": source,
+                    "chunk_index": chunk_index,
+                    "status": "processed"
+                },
+                class_name="Document",
+                vector=embedding  # Ensure this is a flat list of floats
+            )
+        else:
+            logger.error("Invalid embedding format: must be a flat list of floats.")
+
+# Initialize Ollama embeddings
+embeddings = OllamaEmbeddings(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_BASE_URL
+)
+
 @celery_app.task(name='tasks.process_document')
-def process_document(file_path):
-    start_time = get_utc_now()
-    logger.info(f"Starting document processing at {start_time}")
-    processor = DocumentProcessor()
-    result = processor.process_document(file_path)
-    end_time = get_utc_now()
-    logger.info(f"Finished document processing at {end_time}")
-    return result
+def process_document_task(file_path: str):
+    # Create an instance of IndexingHelper
+    indexing_helper = IndexingHelper(redis_url=REDIS_URL)
+    
+    try:
+        # Call process_document with the correct parameters
+        result = indexing_helper.process_document(file_path, weaviate_client=client, embedding_model=embeddings)
+        return result
+    finally:
+        indexing_helper.close()  # Ensure the client is closed
 
 # Celery task for checking and processing pending documents
 @celery_app.task(name='tasks.check_pending_documents')
 def check_pending_documents():
+    logger.info("Checking for pending documents...")
     client = WeaviateHelper.initialize_client(
         rest_url=WEAVIATE_REST_URL,
         grpc_url=WEAVIATE_GRPC_URL,
@@ -104,4 +134,5 @@ def check_pending_documents():
     
     pending_docs = response['data']['Get']['Document']
     for doc in pending_docs:
-        process_document.delay(doc['source']) 
+        logger.info(f"Processing pending document: {doc['source']}")
+        process_document_task.delay(doc['source']) 

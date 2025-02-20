@@ -7,19 +7,30 @@ import docx
 from pypdf import PdfReader
 from werkzeug.utils import secure_filename
 from weaviate.connect import ConnectionParams
+from langchain_ollama import OllamaEmbeddings
 from weaviate.auth import AuthApiKey
 import weaviate
-from llama_index import VectorStoreIndex, Document, ServiceContext
-from llama_index.node_parser import SentenceSplitter
-from llama_index.vector_stores import WeaviateVectorStore
-from llama_index.embeddings import LangchainEmbedding
-import hashlib
-import pickle
+from llama_index.core import VectorStoreIndex
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.vector_stores.weaviate import WeaviateVectorStore
+from llama_index.embeddings.langchain import LangchainEmbedding
 import redis
-from llama_index.readers.directory import SimpleDirectoryReader
 from statistics import mean
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from llama_index.readers.file.docs import DocxReader, PDFReader
+from llama_index.readers.file.flat import FlatReader
+from llama_index.readers.file.tabular import PandasCSVReader, PandasExcelReader
+from llama_index.readers.file.slides import PptxReader
+import datetime
+from config import (
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    UPLOAD_FOLDER,
+    ALLOWED_EXTENSIONS,
+    REDIS_URL
+)
+from llama_index.core.settings import Settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,8 +49,10 @@ class FileHandler:
         """Securely save a file and return the file path."""
         try:
             filename = secure_filename(file.filename)
+            logger.info(f"Saving file: {filename} to {upload_folder}")
             file_path = os.path.join(upload_folder, filename)
             file.save(file_path)
+            logger.info(f"File saved successfully: {file_path}")
             return file_path
         except Exception as e:
             logger.error(f"Error saving file: {str(e)}")
@@ -48,6 +61,7 @@ class FileHandler:
     @staticmethod
     def read_file_content(file_path: str) -> Optional[str]:
         """Optimized file reading with proper error handling and memory management."""
+        logger.info(f"Reading file content from: {file_path}")
         try:
             file_extension = Path(file_path).suffix.lower()[1:]
             
@@ -102,11 +116,35 @@ class FileHandler:
             return None
 
 class WeaviateHelper:
+    _client = None
+
+    @classmethod
+    def get_client(cls):
+        if cls._client is None:
+            cls._client = weaviate.connect_to_local(
+                host="localhost",
+                port=8080,
+                grpc_port=50051
+            )
+            logger.info("Connected to local Weaviate instance.")
+        return cls._client
+
+    @classmethod
+    def close_client(cls):
+        if cls._client is not None:
+            cls._client.close()
+            cls._client = None
+            logger.info("Weaviate client connection closed.")
+
     @staticmethod
-    def check_connection(client: Any) -> bool:
+    def check_connection() -> bool:
         """Check if Weaviate connection is working."""
+        client = WeaviateHelper.get_client()
         try:
-            client.is_ready()
+            if not client.is_ready():
+                logger.warning("Weaviate client is not ready, attempting to reconnect...")
+                # WeaviateHelper.close_client()  # Close the existing client
+                WeaviateHelper.get_client()  # Reconnect
             logger.info("Successfully connected to Weaviate!")
             return True
         except Exception as e:
@@ -114,19 +152,19 @@ class WeaviateHelper:
             return False
 
     @staticmethod
-    def store_document_chunk(batch: Any, chunk: str, embedding: List[float], 
-                           source: str, chunk_index: int) -> None:
-        """Store a document chunk in Weaviate."""
-        batch.add_data_object(
-            data_object={
-                "content": chunk,
-                "source": source,
-                "chunk_index": chunk_index,
-                "status": "processed"
-            },
-            class_name="Document",
-            vector=embedding
-        )
+    # def store_document_chunk(chunk: str, embedding: List[float], source: str, chunk_index: int) -> None:
+    #     """Store a document chunk in Weaviate."""
+    #     weaviate_client = WeaviateHelper.get_client()
+    #     weaviate_client.data.create(
+    #         data={
+    #             "content": chunk,
+    #             "source": source,
+    #             "chunk_index": chunk_index,
+    #             "status": "processed"
+    #         },
+    #         class_name="Document",
+    #         vector=embedding
+    #     )
 
     @staticmethod
     def initialize_client(
@@ -160,7 +198,7 @@ class WeaviateHelper:
             )
             
             # Test connection
-            if WeaviateHelper.check_connection(client):
+            if WeaviateHelper.check_connection():
                 return client
             return None
             
@@ -299,108 +337,175 @@ class PerformanceMonitor:
 class IndexingHelper:
     def __init__(self, redis_url: str):
         self.redis_client = redis.from_url(redis_url)
-        self._service_context = None
         self._vector_store = None
         self.performance = PerformanceMonitor()
         
-    def initialize_components(self, embeddings: Any, weaviate_client: Any):
-        """Initialize LlamaIndex components."""
-        # Create vector store
+        # Initialize specialized readers for each file type
+        self.readers = {
+            'txt': FlatReader(),
+            'docx': DocxReader(),
+            'pdf': PDFReader(),
+            'json': FlatReader(),
+            'csv': PandasCSVReader(
+                concat_rows=False,  # Create separate document for each row
+                col_joiner=", ",
+                pandas_config={'encoding': 'utf-8'}
+            ),
+            'xlsx': PandasExcelReader(
+                concat_rows=False,
+                sheet_name=None  # Process all sheets
+            ),
+            # 'pptx': PptxReader()
+        }
+    
+    def initialize_vector_store(self, weaviate_client: Any):
+        """Initialize the vector store."""
         self._vector_store = WeaviateVectorStore(
             weaviate_client=weaviate_client,
             index_name="Document",
             text_key="content"
         )
-        
-        # Create service context with caching
-        embed_model = LangchainEmbedding(embeddings)
-        self._service_context = ServiceContext.from_defaults(
-            embed_model=embed_model,
-            node_parser=SentenceSplitter(
-                chunk_size=1000,
-                chunk_overlap=50,
-                separator=" ",
-                paragraph_separator="\n\n",
-            ),
-            # Enable caching
-            embed_model_provider_kwargs={"cache_folder": ".cache"}
-        )
+        print("Vector store initialized:", self._vector_store)
 
-    def process_document(self, file_path: str, weaviate_client: Any, embeddings: Any) -> bool:
-        """Optimized document processing with batching and caching."""
+    def process_document(self, file_path: str, weaviate_client: Any, embedding_model: OllamaEmbeddings, chunk_size: Optional[int] = None) -> bool:
+        """Optimized document processing with specialized readers."""
         try:
-            if not self._service_context:
-                self.initialize_components(embeddings, weaviate_client)
+            # Initialize the vector store
+            self.initialize_vector_store(weaviate_client)
             
-            # Use LlamaIndex's optimized document loading
-            documents = SimpleDirectoryReader(
-                input_files=[file_path],
-                filename_as_id=True,
-                num_files_limit=1,  # Process one file at a time
-                file_extractor={
-                    ".pdf": "PyPDFLoader",
-                    ".docx": "DocxLoader",
-                    ".txt": "TextLoader",
-                    ".json": "JSONLoader"
+            # Get appropriate reader based on file extension
+            file_extension = Path(file_path).suffix.lower()[1:]
+            reader = self.readers.get(file_extension)
+            
+            if not reader:
+                raise ValueError(f"Unsupported file type: {file_extension}")
+            
+            # Load document with enhanced metadata
+            documents = reader.load_data(
+                Path(file_path),
+                extra_info={
+                    'source': Path(file_path).name,
+                    'file_type': file_extension,
+                    'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),  # Use timezone-aware datetime
+                    'processor': reader.__class__.__name__,
+                    'page_count': self._get_page_count(file_path) if file_extension == 'pdf' else None
                 }
-            ).load_data()
-            
-            # Create optimized index with progress tracking
-            index = VectorStoreIndex.from_documents(
-                documents,
-                service_context=self._service_context,
-                vector_store=self._vector_store,
-                show_progress=True,
-                use_async=True  # Enable async processing
             )
             
+            print(f"Loaded {len(documents)} documents from {file_path}")
+
+            # Process each document individually
+            for chunk_index, document in enumerate(documents):
+                print(f"Processing document: {document}")  # Log the entire document object
+                print(f"Document attributes: {vars(document)}")  # Log the attributes of the document
+                print("Using model:", OLLAMA_MODEL)
+                # Access the correct method for generating embeddings
+                embedding = embedding_model.embed_documents(document.text)  # Change this if the method is different
+                print("embedding->>>>>", embedding)
+                print("embedding->>>>>" , len(embedding), len(embedding[0]))
+
+                # Store each document chunk in Weaviate directly
+                # weaviate_client.data.create(
+                #     data={
+                #         "content": document.content,
+                #         "source": document.source,
+                #         "chunk_index": chunk_index,
+                #         "status": "processed"
+                #     },
+                #     class_name="Document",
+                #     vector=embedding
+                # )
+
+                    # Create a collection if it doesn't exist
+                if not weaviate_client.collections.exists("Document"):
+                    print("document collection do not exist creating one ------------")
+                    weaviate_client.collections.create(
+                        name="Document",
+                        properties=[
+                            {"name": "content", "dataType": "text"},
+                            {"name": "source", "dataType": "text"},
+                            {"name": "chunk_index", "dataType": "int"},
+                            {"name": "status", "dataType": "text"}
+                        ]
+                    )
+
+                # In your process_document method, replace the weaviate_client.data.create() call with:
+                document_collection = weaviate_client.collections.get("Document")
+                document_collection.data.insert(
+                    properties={
+                        "content": document.text,
+                        "source": document.metadata.get('source'),
+                        "chunk_index": chunk_index,
+                        "status": "processed"
+                    },
+                    vector=embedding[0]
+                )
+
+            
+            print(f"Successfully processed and indexed {len(documents)} documents.")
             return True
             
         except Exception as e:
-            logger.error(f"Error processing document: {str(e)}")
+            print(f"Error processing document: {str(e)}")
             return False
 
-    def query_document(self, query: str, document_name: str, limit: int = 3) -> List[Dict]:
-        """Optimized document querying with caching and parallel processing."""
+    def _get_page_count(self, file_path: str) -> Optional[int]:
+        """Get page count for PDF files."""
         try:
-            # Create optimized query engine
-            query_engine = self._vector_store.as_query_engine(
-                service_context=self._service_context,
-                similarity_top_k=limit,
-                vector_store_kwargs={
-                    "where_filter": {
-                        "path": ["source"],
-                        "operator": "Equal",
-                        "valueString": document_name
-                    }
-                },
-                streaming=True,  # Enable streaming for large results
-                response_mode="compact"  # Optimize response format
+            with open(file_path, 'rb') as file:
+                pdf_reader = PdfReader(file)
+                return len(pdf_reader.pages)
+        except:
+            return None
+
+    def query_document(self, query: str, document_name: str, limit: int = 3, unique: bool = False) -> List[Dict]:
+        """Query documents from the vector store.
+        
+        Args:
+            query: The search query
+            document_name: Name of the source document to filter by
+            limit: Maximum number of results to return
+            unique: If True, return unique results only (currently not implemented)
+        
+        Returns:
+            List of dictionaries containing the search results
+        """
+        try:
+            if not self._vector_store:
+                logger.error("Vector store not initialized")
+                return []
+
+            # Use similarity_search with the query
+            nodes = self._vector_store.similarity_search(
+                query,
+                k=limit,
+                where_filter={
+                    "path": ["source"],
+                    "operator": "Equal",
+                    "valueString": document_name
+                }
             )
             
-            # Execute query with timeout
-            response = query_engine.query(query)
+            # Format results to match our document structure
+            results = []
+            for node in nodes:
+                result = {
+                    "content": node.text,
+                    "source": node.metadata.get('source'),
+                    "chunk_index": node.metadata.get('chunk_index'),
+                    "status": node.metadata.get('status', 'retrieved'),
+                    "score": node.score if hasattr(node, 'score') else None
+                }
+                results.append(result)
             
-            # Process results in parallel
-            with ThreadPoolExecutor() as executor:
-                results = list(executor.map(
-                    lambda node: {
-                        'content': node.text,
-                        'source': node.metadata.get('source'),
-                        'document_id': node.node_id,
-                        'relevance_score': node.score,
-                        'chunk_index': node.metadata.get('chunk_index', 0),
-                        'page_number': node.metadata.get('page_number'),
-                        'timestamp': node.metadata.get('timestamp')
-                    },
-                    response.source_nodes
-                ))
-            
+            logger.info(f"Found {len(results)} results for query in document {document_name}")
             return results
             
         except Exception as e:
             logger.error(f"Error querying document: {str(e)}")
             return []
+
+    
 
     def query_json_document(self, 
                           query: Dict[str, Any], 
@@ -453,3 +558,15 @@ class IndexingHelper:
         except Exception as e:
             logger.error(f"Error querying JSON document: {str(e)}")
             return {'error': str(e)} 
+
+    def close(self):
+        if self._vector_store:
+            self._vector_store.client.close()  # Close the Weaviate client connection
+            print("Weaviate client connection closed.")
+
+# Example usage of WeaviateHelper
+if __name__ == "__main__":
+    client = WeaviateHelper.get_client()
+    if client:
+        # Perform operations with the client
+        pass 

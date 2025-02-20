@@ -24,4 +24,12 @@ CHUNK_OVERLAP = int(os.getenv('CHUNK_OVERLAP', '200'))
 
 # Flask Configuration
 UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'pdf', 'docx', 'json', 'txt'}
+ALLOWED_EXTENSIONS = {
+    'pdf', 
+    'docx', 
+    'json', 
+    'txt', 
+    'csv', 
+    'xlsx', 
+    'pptx'
+}

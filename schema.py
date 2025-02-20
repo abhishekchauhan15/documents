@@ -7,15 +7,10 @@ from config import (
     WEAVIATE_CLIENT_NAME,
     WEAVIATE_ADMIN_API_KEY
 )
-from utils import WeaviateHelper
+from utils import FileHandler, WeaviateHelper, logger, IndexingHelper
 
-# Initialize Weaviate client
-client = WeaviateHelper.initialize_client(
-    rest_url=WEAVIATE_REST_URL,
-    grpc_url=WEAVIATE_GRPC_URL,
-    client_name=WEAVIATE_CLIENT_NAME,
-    api_key=WEAVIATE_ADMIN_API_KEY
-)
+# Get Weaviate client
+client = WeaviateHelper.get_client()
 
 if client is None:
     raise Exception("Failed to initialize Weaviate client")
