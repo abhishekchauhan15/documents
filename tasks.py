@@ -3,6 +3,7 @@ from config import REDIS_URL, OLLAMA_MODEL, OLLAMA_BASE_URL
 from utils import IndexingHelper, WeaviateHelper
 from langchain_ollama import OllamaEmbeddings
 import logging
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,21 +26,26 @@ celery.conf.update(
 def process_document_task(self, file_path: str) -> bool:
     """Process and index a document."""
     try:
-        logger.info(f"Processing document: {file_path}")
+        logger.info(f"Starting to process document: {file_path}")
         
         # Initialize components
+        logger.info("Initializing Weaviate client...")
         client = WeaviateHelper.get_client()
         if not client:
+            logger.error("Failed to initialize Weaviate client")
             raise Exception("Failed to initialize Weaviate client")
             
+        logger.info("Initializing Ollama embeddings...")
         embeddings = OllamaEmbeddings(
             model=OLLAMA_MODEL,
             base_url=OLLAMA_BASE_URL
         )
         
+        logger.info("Initializing IndexingHelper...")
         indexing_helper = IndexingHelper(REDIS_URL)
         
         # Process the document
+        logger.info("Starting document processing...")
         success = indexing_helper.process_document(
             file_path=file_path,
             weaviate_client=client,
@@ -48,6 +54,11 @@ def process_document_task(self, file_path: str) -> bool:
         
         if success:
             logger.info(f"Successfully processed document: {file_path}")
+            # Verify Redis entry was created
+            doc_name = Path(file_path).name
+            doc_key = f"document:{doc_name}"
+            status = indexing_helper.redis_client.hget(doc_key, "status")
+            logger.info(f"Verified Redis entry - Key: {doc_key}, Status: {status}")
             return True
         else:
             logger.error(f"Failed to process document: {file_path}")
