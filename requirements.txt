@@ -2,14 +2,10 @@ flask
 celery
 redis
 python-dotenv
-weaviate-client
+weaviate-client>=3.23.2,<4.0.0
 langchain
 langchain-community
 langchain-ollama
-llama-index-core
-llama-index-embeddings-langchain
-llama-index-vector-stores-weaviate
-llama-index-readers-file
 pypdf
 python-docx
 python-pptx
@@ -17,3 +13,6 @@ openpyxl
 pandas
 werkzeug
 python-magic
+unstructured
+docx2txt
+tabulate
