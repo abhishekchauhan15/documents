@@ -10,12 +10,12 @@ WEAVIATE_API_KEY = os.getenv('WEAVIATE_API_KEY', None)
 
 # Ollama Configuration
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama2')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:latest')
 
 # Redis Configuration
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
-# Document Processing Configuration
+# Document Processing Configurationś
 CHUNK_SIZE = int(os.getenv('CHUNK_SIZE', '1000'))
 CHUNK_OVERLAP = int(os.getenv('CHUNK_OVERLAP', '200'))
 MAX_DOCUMENT_SIZE = int(os.getenv('MAX_DOCUMENT_SIZE', '10485760'))  # 10MB default

@@ -34,7 +34,7 @@ celery.conf.update(
 )
 
 @celery.task(bind=True)
-def process_document_task(self, file_path: str) -> bool:
+def process_document_task(self, file_path: str):
     """Process and index a document."""
     try:
         logger.info(f"Starting to process document: {file_path}")
@@ -57,23 +57,19 @@ def process_document_task(self, file_path: str) -> bool:
         
         # Process the document
         logger.info("Starting document processing...")
-        success = indexing_helper.process_document(
+        result = indexing_helper.process_document(
             file_path=file_path,
             weaviate_client=client,
             embedding_model=embeddings
         )
         
-        if success:
-            logger.info(f"Successfully processed document: {file_path}")
-            # Verify Redis entry was created
-            doc_name = Path(file_path).name
-            doc_key = f"document:{doc_name}"
-            status = indexing_helper.redis_client.hget(doc_key, "status")
-            logger.info(f"Verified Redis entry - Key: {doc_key}, Status: {status}")
-            return True
+        if isinstance(result, dict) and result.get('status') == 'success':
+            logger.info(f"Successfully processed document: {file_path} with ID: {result.get('document_id')}")
+            return result
         else:
-            logger.error(f"Failed to process document: {file_path}")
-            return False
+            error_msg = "Failed to process document - no success status returned"
+            logger.error(error_msg)
+            raise Exception(error_msg)
             
     except Exception as e:
         logger.error(f"Error processing document {file_path}: {str(e)}")
