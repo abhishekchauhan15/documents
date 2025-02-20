@@ -4,22 +4,20 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 import json
 import docx
+import weaviate
 from pypdf import PdfReader
-from werkzeug.utils import secure_filename
-from weaviate import Client
 from langchain_ollama import OllamaEmbeddings
+from werkzeug.utils import secure_filename
 import redis
 from statistics import mean
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 import datetime
+import uuid
 from langchain_community.document_loaders import (
     TextLoader,
     PyPDFLoader,
     Docx2txtLoader,
-    UnstructuredPowerPointLoader,
-    CSVLoader,
-    UnstructuredExcelLoader,
 )
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Weaviate
@@ -65,37 +63,9 @@ class WeaviateHelper:
         """Get or create Weaviate client."""
         if cls._client is None:
             try:
-                cls._client = Client(
+                cls._client = weaviate.Client(
                     url="http://localhost:8080"
                 )
-                # Create schema if it doesn't exist
-                if not cls._client.schema.exists("Document"):
-                    cls._client.schema.create_class({
-                        "class": "Document",
-                        "properties": [
-                            {
-                                "name": "content",
-                                "dataType": ["text"],
-                                "description": "The content of the document chunk"
-                            },
-                            {
-                                "name": "source",
-                                "dataType": ["text"],
-                                "description": "The source filename"
-                            },
-                            {
-                                "name": "chunk_index",
-                                "dataType": ["int"],
-                                "description": "Index of the chunk in the document"
-                            },
-                            {
-                                "name": "status",
-                                "dataType": ["text"],
-                                "description": "Processing status of the chunk"
-                            }
-                        ],
-                        "vectorizer": "none"  # We'll provide vectors ourselves
-                    })
                 logger.info("Successfully connected to Weaviate")
             except Exception as e:
                 logger.error(f"Failed to connect to Weaviate: {str(e)}")
@@ -159,22 +129,32 @@ class IndexingHelper:
                             {
                                 "name": "content",
                                 "dataType": ["text"],
-                                "description": "The text content of the chunk"
+                                "description": "The text content of the chunk",
+                                "indexInverted": True
                             },
                             {
-                                "name": "source",
+                                "name": "documentId",
                                 "dataType": ["text"],
-                                "description": "Source document name"
+                                "description": "Unique identifier for the document",
+                                "indexInverted": True
+                            },
+                            {
+                                "name": "fileName",
+                                "dataType": ["text"],
+                                "description": "Original file name",
+                                "indexInverted": True
                             },
                             {
                                 "name": "chunkIndex",
                                 "dataType": ["int"],
-                                "description": "Index of this chunk in the document"
+                                "description": "Index of this chunk in the document",
+                                "indexInverted": True
                             },
                             {
                                 "name": "processedAt",
                                 "dataType": ["text"],
-                                "description": "Timestamp when this chunk was processed"
+                                "description": "Timestamp when this chunk was processed",
+                                "indexInverted": True
                             }
                         ]
                     }
@@ -186,7 +166,8 @@ class IndexingHelper:
                     index_name="Document",
                     text_key="content",
                     embedding=self.embeddings,
-                    by_text=False
+                    by_text=False,
+                    attributes=["documentId", "fileName", "chunkIndex", "processedAt"]
                 )
                 logger.info("Vector store initialized successfully")
         except Exception as e:
@@ -199,12 +180,15 @@ class IndexingHelper:
             # Record start time
             start_time = datetime.datetime.now()
             
+            # Generate unique document ID
+            document_id = str(uuid.uuid4())
+            
             # Get file extension and name
             file_path = Path(file_path)
             file_ext = file_path.suffix[1:].lower()
             file_name = file_path.name
             
-            logger.info(f"Step 1: Processing document: {file_name} (type: {file_ext})")
+            logger.info(f"Step 1: Processing document: {file_name} (ID: {document_id})")
             
             if file_ext not in self.loaders:
                 raise ValueError(f"Unsupported file type: {file_ext}")
@@ -227,7 +211,8 @@ class IndexingHelper:
                 # Clean chunk metadata to only include allowed properties
                 for i, chunk in enumerate(chunks):
                     chunk.metadata = {
-                        "source": file_name,
+                        "documentId": document_id,
+                        "fileName": file_name,
                         "chunkIndex": i,
                         "processedAt": datetime.datetime.now().isoformat()
                     }
@@ -257,7 +242,7 @@ class IndexingHelper:
             # Save to Redis
             try:
                 logger.info("Step 6: Saving metadata to Redis")
-                redis_key = f"document:{file_name}"
+                redis_key = f"document:{document_id}"
                 
                 # Test Redis connection before saving
                 self.redis_client.ping()
@@ -266,6 +251,8 @@ class IndexingHelper:
                 # Save metadata as strings
                 metadata_mapping = {
                     "status": "processed",
+                    "documentId": document_id,
+                    "fileName": file_name,
                     "chunk_count": str(len(chunks)),
                     "processing_time": str((datetime.datetime.now() - start_time).total_seconds()),
                     "processed_at": datetime.datetime.now().isoformat()
@@ -278,6 +265,9 @@ class IndexingHelper:
                 )
                 logger.info(f"Redis hset result: {result}")
                 
+                # Save filename to document ID mapping for easy lookup
+                self.redis_client.set(f"filename:{file_name}", document_id)
+                
                 # Verify the data was saved
                 saved_data = self.redis_client.hgetall(redis_key)
                 if not saved_data:
@@ -288,7 +278,7 @@ class IndexingHelper:
                 logger.error(f"Failed to save to Redis: {str(e)}")
                 raise
             
-            logger.info(f"Successfully completed all steps for document: {file_name}")
+            logger.info(f"Successfully completed all steps for document: {file_name} (ID: {document_id})")
             return True
             
         except Exception as e:
@@ -296,9 +286,11 @@ class IndexingHelper:
             try:
                 # Attempt to save error status to Redis
                 self.redis_client.hset(
-                    f"document:{file_name}",
+                    f"document:{document_id}",
                     mapping={
                         "status": "error",
+                        "documentId": document_id,
+                        "fileName": file_name,
                         "error": str(e),
                         "error_time": datetime.datetime.now().isoformat()
                     }
@@ -313,44 +305,61 @@ class IndexingHelper:
             # Record start time
             start_time = datetime.datetime.now()
             
-            # Verify document exists
-            doc_key = f"document:{document_name}"
-            logger.info(f"Checking for document with key: {doc_key}")
-            
-            # List all keys in Redis for debugging
-            all_keys = self.redis_client.keys("document:*")
-            logger.info(f"Available document keys in Redis: {all_keys}")
-            
-            if not self.redis_client.exists(doc_key):
-                logger.error(f"Document not found in Redis: {doc_key}")
+            # First check if document exists in Redis
+            available_docs = self.list_documents()
+            matching_doc = None
+            for doc in available_docs:
+                if doc['fileName'] == document_name:
+                    matching_doc = doc
+                    break
+                    
+            if not matching_doc:
                 raise ValueError(f"Document not found: {document_name}")
+                
+            document_id = matching_doc['documentId']
             
-            # Get document status
-            doc_status = self.redis_client.hget(doc_key, "status")
-            logger.info(f"Document status from Redis: {doc_status}")
+            # Initialize vector store if needed
+            if self._vector_store is None:
+                client = WeaviateHelper.get_client()
+                if not client:
+                    raise Exception("Failed to initialize Weaviate client")
+                self.initialize_vector_store(client)
             
-            if doc_status != b"processed":
-                logger.error(f"Document not ready - status: {doc_status}")
-                raise ValueError(f"Document not ready: {document_name}")
+            # Perform similarity search with document ID filter
+            logger.info(f"Performing similarity search for query: {query} in document: {document_name} (ID: {document_id})")
             
-            # Perform similarity search
-            logger.info(f"Performing similarity search for query: {query}")
+            # Construct where filter for Weaviate
+            where_filter = {
+                "operator": "Equal",
+                "path": ["documentId"],
+                "valueString": document_id
+            }
+            
             results = self._vector_store.similarity_search_with_score(
                 query,
                 k=limit,
-                filter={"source": document_name}
+                filter=where_filter
             )
             
+            if not results:
+                logger.warning(f"No results found for document: {document_name}")
+                return []
+                
             # Format results
             formatted_results = []
             for doc, score in results:
+                # Verify this result belongs to our document
+                if doc.metadata.get('documentId') != document_id:
+                    logger.warning(f"Filtered out result from wrong document: {doc.metadata.get('documentId')}")
+                    continue
+                    
                 formatted_results.append({
                     "content": doc.page_content,
-                    "metadata": doc.metadata,
+                    "chunk_index": doc.metadata.get('chunkIndex', 0),
                     "relevance_score": float(score)
                 })
             
-            logger.info(f"Found {len(formatted_results)} results")
+            logger.info(f"Found {len(formatted_results)} results for document: {document_name}")
             
             # Record performance metrics
             end_time = datetime.datetime.now()
@@ -363,23 +372,7 @@ class IndexingHelper:
             logger.error(f"Error querying document: {str(e)}")
             raise
 
-    def delete_document(self, document_name: str) -> bool:
-        """Delete a document and its chunks from Weaviate."""
-        try:
-            # Delete from vector store
-            self._vector_store.delete({"source": document_name})
-            
-            # Delete from Redis
-            self.redis_client.delete(f"document:{document_name}")
-            
-            logger.info(f"Successfully deleted document: {document_name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error deleting document: {str(e)}")
-            return False
-
-    def list_documents(self) -> List[str]:
+    def list_documents(self) -> List[Dict[str, str]]:
         """List all available processed documents."""
         try:
             # Get all document keys from Redis
@@ -387,12 +380,43 @@ class IndexingHelper:
             documents = []
             
             for key in all_keys:
-                # Convert bytes to string and remove 'document:' prefix
-                doc_name = key.decode('utf-8').replace('document:', '')
-                # Check if document is processed
-                status = self.redis_client.hget(key, "status")
-                if status == b"processed":
-                    documents.append(doc_name)
+                try:
+                    # Get document data
+                    doc_data = self.redis_client.hgetall(key)
+                    if not doc_data:
+                        logger.warning(f"No data found for key: {key}")
+                        continue
+
+                    # Check if it's processed
+                    status = doc_data.get(b"status", b"").decode('utf-8')
+                    if status != "processed":
+                        logger.debug(f"Skipping document with status: {status}")
+                        continue
+
+                    # Handle both old and new format
+                    doc_id = doc_data.get(b"documentId", b"").decode('utf-8')
+                    if not doc_id:
+                        # Old format - key is document:filename
+                        doc_id = key.decode('utf-8').replace('document:', '')
+                        
+                    file_name = doc_data.get(b"fileName", b"").decode('utf-8')
+                    if not file_name:
+                        # Old format - use the key as filename
+                        file_name = key.decode('utf-8').replace('document:', '')
+
+                    processed_at = doc_data.get(b"processed_at", b"unknown").decode('utf-8')
+                    chunk_count = doc_data.get(b"chunk_count", b"0").decode('utf-8')
+
+                    documents.append({
+                        "documentId": doc_id,
+                        "fileName": file_name,
+                        "processed_at": processed_at,
+                        "chunk_count": chunk_count
+                    })
+                    logger.info(f"Found document: {file_name} (ID: {doc_id})")
+                except Exception as e:
+                    logger.error(f"Error processing key {key}: {str(e)}")
+                    continue
             
             logger.info(f"Found {len(documents)} processed documents")
             return documents
@@ -400,6 +424,31 @@ class IndexingHelper:
         except Exception as e:
             logger.error(f"Error listing documents: {str(e)}")
             return []
+        
+    def delete_document(self, document_name: str) -> bool:
+        """Delete a document and its chunks from Weaviate."""
+        try:
+            # Get document ID
+            document_id = self.redis_client.get(f"filename:{document_name}")
+            if not document_id:
+                logger.error(f"No document ID found for filename: {document_name}")
+                return False
+            
+            document_id = document_id.decode('utf-8')
+            
+            # Delete from vector store using document ID
+            self._vector_store.delete({"documentId": document_id})
+            
+            # Delete from Redis
+            self.redis_client.delete(f"document:{document_id}")
+            self.redis_client.delete(f"filename:{document_name}")
+            
+            logger.info(f"Successfully deleted document: {document_name} (ID: {document_id})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting document: {str(e)}")
+            return False
 
 class PerformanceMonitor:
     def __init__(self):

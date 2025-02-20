@@ -3,14 +3,25 @@ from config import REDIS_URL, OLLAMA_MODEL, OLLAMA_BASE_URL
 from utils import IndexingHelper, WeaviateHelper
 from langchain_ollama import OllamaEmbeddings
 import logging
+import platform
 from pathlib import Path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize Celery
-celery = Celery('tasks', broker=REDIS_URL, backend=REDIS_URL)
+# Initialize Celery with appropriate pool based on OS
+if platform.system() == 'Windows':
+    # Use solo pool for Windows
+    celery = Celery('tasks', 
+                    broker=REDIS_URL, 
+                    backend=REDIS_URL,
+                    pool='solo')
+else:
+    # Use default pool for other OS
+    celery = Celery('tasks', 
+                    broker=REDIS_URL, 
+                    backend=REDIS_URL)
 
 # Configure Celery
 celery.conf.update(

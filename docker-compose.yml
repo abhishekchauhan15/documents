@@ -3,54 +3,83 @@ version: '3.8'
 services:
   web:
     build: .
-    command: python app.py
+    restart: unless-stopped
+    command: gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 120 app:app
     ports:
-      - "5000:5000"
+      - "80:5000"
     volumes:
-      - .:/app
       - ./uploads:/app/uploads
     environment:
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=http://ollama:11434
+      - FLASK_ENV=production
     depends_on:
       - redis
       - ollama
       - celery_worker
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   celery_worker:
     build: .
+    restart: unless-stopped
     command: celery -A tasks worker --pool=solo -l info
     volumes:
-      - .:/app
       - ./uploads:/app/uploads
     environment:
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=http://ollama:11434
+      - FLASK_ENV=production
     depends_on:
       - redis
       - ollama
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   celery_beat:
     build: .
+    restart: unless-stopped
     command: celery -A tasks beat -l info
-    volumes:
-      - .:/app
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - FLASK_ENV=production
     depends_on:
       - redis
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:alpine
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   ollama:
     image: ollama/ollama
-    ports:
-      - "11434:11434"
+    restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
-  ollama_data: 
+  ollama_data:
+  redis_data:

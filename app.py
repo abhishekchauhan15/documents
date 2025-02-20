@@ -108,50 +108,51 @@ def update_document(document_name):
 
 @app.route('/query', methods=['POST'])
 def query_document():
-    """
-    Query a specific document.
-    Accepts JSON with 'query' and 'document_name' fields.
-    Optional 'limit' field for number of results (default: QUERY_RESULT_LIMIT).
-    """
-    logger.info("Querying document...")
-    data = request.json
-    if not data or 'query' not in data or 'document_name' not in data:
-        logger.warning("Missing query or document_name")
-        return jsonify({'error': 'Missing query or document_name'}), 400
-    
-    query = data['query']
-    document_name = data['document_name']
-    limit = data.get('limit', QUERY_RESULT_LIMIT)
-    
+    """Query a document with a search query."""
     try:
-        # Initialize components
+        data = request.get_json()
+        if not data or 'query' not in data or 'document_name' not in data:
+            return jsonify({'error': 'Missing query or document_name in request'}), 400
+            
+        query = data['query']
+        document_name = data['document_name']
+        limit = data.get('limit', 3)
+        
+        # Initialize helpers
         indexing_helper = IndexingHelper(REDIS_URL)
         
-        # List all available documents
+        # Get available documents
         available_docs = indexing_helper.list_documents()
         logger.info(f"Available documents: {available_docs}")
         
-        if document_name not in available_docs:
+        # Find the exact document by name
+        matching_doc = None
+        for doc in available_docs:
+            if doc['fileName'] == document_name:
+                matching_doc = doc
+                break
+                
+        if not matching_doc:
             logger.error(f"Document not found. Available documents: {available_docs}")
             return jsonify({
                 'error': 'Document not found',
                 'available_documents': available_docs
             }), 404
-        
-        # Initialize vector store
-        indexing_helper.initialize_vector_store(client)
-        
-        # Perform query
-        results = indexing_helper.query_document(query, document_name, limit)
+            
+        # Query using the document name
+        results = indexing_helper.query_document(
+            query=query,
+            document_name=document_name,
+            limit=limit
+        )
         
         return jsonify({
-            'query': query,
-            'document': document_name,
-            'results': results
-        }), 200
+            'results': results,
+            'document_info': matching_doc
+        })
         
     except Exception as e:
-        logger.error(f"Error querying document: {str(e)}")
+        logger.error(f"Error processing query: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/status/<task_id>', methods=['GET'])
@@ -178,6 +179,7 @@ def health_check():
         return jsonify({'status': 'healthy'}), 200
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)
