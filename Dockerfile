@@ -31,11 +31,11 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
 # Expose port
-EXPOSE 5000
+EXPOSE 80
 
 # Create a non-root user and set proper permissions
 RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Set the default command
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:80", "--workers", "4", "--timeout", "120", "app:app"]

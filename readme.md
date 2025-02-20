@@ -257,35 +257,6 @@ GET /status/<task_id>
    - Implement caching for frequent queries
    - Add query result ranking improvements
 
-#
-
-### Installation
-1. Install Python dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-2. Start required services:
-```bash
-# Start Redis
-redis-server
-
-# Start Weaviate
-docker-compose up -d
-
-# Start Ollama
-ollama run llama2
-```
-
-3. Start the application:
-```bash
-# Terminal 1: Start Flask
-flask run
-
-# Terminal 2: Start Celery
-celery -A tasks worker --loglevel=info --pool=solo
-```
-
 ## Error Handling
 
 The system implements comprehensive error handling:

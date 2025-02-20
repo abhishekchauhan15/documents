@@ -16,3 +16,4 @@ python-magic
 unstructured
 docx2txt
 tabulate
+gunicorn

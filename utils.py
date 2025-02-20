@@ -28,7 +28,8 @@ from config import (
     ALLOWED_EXTENSIONS,
     REDIS_URL,
     CHUNK_SIZE,
-    CHUNK_OVERLAP
+    CHUNK_OVERLAP,
+    WEAVIATE_URL
 )
 
 # Configure logging
@@ -64,12 +65,15 @@ class WeaviateHelper:
         if cls._client is None:
             try:
                 cls._client = weaviate.Client(
-                    url="http://localhost:8080"
+                    url=WEAVIATE_URL,
+                    startup_period=15  # Wait up to 15 seconds for Weaviate to be ready
                 )
+                # Test the connection
+                cls._client.schema.get()
                 logger.info("Successfully connected to Weaviate")
             except Exception as e:
                 logger.error(f"Failed to connect to Weaviate: {str(e)}")
-                return None
+                cls._client = None
         return cls._client
 
     @classmethod
