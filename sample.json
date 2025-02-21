@@ -1,0 +1,190 @@
+
+[
+    {
+        "customer_id": 101,
+        "name": "Customer 101",
+        "age": 63,
+        "membership": "Gold",
+        "purchases_last_6_months": 14,
+        "total_spent": 29533.75,
+        "preferred_category": "Toys",
+        "last_purchase_date": "2025-01-31",
+        "nearest_store": "Bangalore Whitefield"
+    },
+    {
+        "customer_id": 102,
+        "name": "Customer 102",
+        "age": 58,
+        "membership": "Gold",
+        "purchases_last_6_months": 11,
+        "total_spent": 20658.48,
+        "preferred_category": "Fitness",
+        "last_purchase_date": "2024-09-19",
+        "nearest_store": "Kolkata Park Street"
+    },
+    {
+        "customer_id": 103,
+        "name": "Customer 103",
+        "age": 48,
+        "membership": "Gold",
+        "purchases_last_6_months": 18,
+        "total_spent": 17175.46,
+        "preferred_category": "Fashion",
+        "last_purchase_date": "2024-09-04",
+        "nearest_store": "Mumbai Central"
+    },
+    {
+        "customer_id": 104,
+        "name": "Customer 104",
+        "age": 44,
+        "membership": "Gold",
+        "purchases_last_6_months": 13,
+        "total_spent": 8425.19,
+        "preferred_category": "Home Appliances",
+        "last_purchase_date": "2024-11-26",
+        "nearest_store": "Kolkata Park Street"
+    },
+    {
+        "customer_id": 105,
+        "name": "Customer 105",
+        "age": 24,
+        "membership": "Silver",
+        "purchases_last_6_months": 23,
+        "total_spent": 8441.36,
+        "preferred_category": "Books",
+        "last_purchase_date": "2024-08-28",
+        "nearest_store": "Pune Koregaon Park"
+    },
+    {
+        "customer_id": 106,
+        "name": "Customer 106",
+        "age": 56,
+        "membership": "Platinum",
+        "purchases_last_6_months": 12,
+        "total_spent": 14030.25,
+        "preferred_category": "Fashion",
+        "last_purchase_date": "2024-09-03",
+        "nearest_store": "Hyderabad Banjara Hills"
+    },
+    {
+        "customer_id": 107,
+        "name": "Customer 107",
+        "age": 64,
+        "membership": "Gold",
+        "purchases_last_6_months": 30,
+        "total_spent": 12388.9,
+        "preferred_category": "Furniture",
+        "last_purchase_date": "2024-09-29",
+        "nearest_store": "Chennai T Nagar"
+    },
+    {
+        "customer_id": 108,
+        "name": "Customer 108",
+        "age": 45,
+        "membership": "Silver",
+        "purchases_last_6_months": 24,
+        "total_spent": 5246.69,
+        "preferred_category": "Books",
+        "last_purchase_date": "2024-11-02",
+        "nearest_store": "Bangalore Whitefield"
+    },
+    {
+        "customer_id": 109,
+        "name": "Customer 109",
+        "age": 38,
+        "membership": "Gold",
+        "purchases_last_6_months": 21,
+        "total_spent": 7915.38,
+        "preferred_category": "Luxury Goods",
+        "last_purchase_date": "2024-10-01",
+        "nearest_store": "Hyderabad Banjara Hills"
+    },
+    {
+        "customer_id": 110,
+        "name": "Customer 110",
+        "age": 21,
+        "membership": "Platinum",
+        "purchases_last_6_months": 29,
+        "total_spent": 19696.47,
+        "preferred_category": "Toys",
+        "last_purchase_date": "2025-02-10",
+        "nearest_store": "Hyderabad Banjara Hills"
+    },
+    {
+        "customer_id": 111,
+        "name": "Customer 111",
+        "age": 46,
+        "membership": "Silver",
+        "purchases_last_6_months": 12,
+        "total_spent": 25639.3,
+        "preferred_category": "Luxury Goods",
+        "last_purchase_date": "2024-12-02",
+        "nearest_store": "Delhi Connaught Place"
+    },
+    {
+        "customer_id": 112,
+        "name": "Customer 112",
+        "age": 63,
+        "membership": "Silver",
+        "purchases_last_6_months": 13,
+        "total_spent": 7003.77,
+        "preferred_category": "Fashion",
+        "last_purchase_date": "2024-12-27",
+        "nearest_store": "Pune Koregaon Park"
+    },
+    {
+        "customer_id": 113,
+        "name": "Customer 113",
+        "age": 18,
+        "membership": "Gold",
+        "purchases_last_6_months": 19,
+        "total_spent": 23267.06,
+        "preferred_category": "Electronics",
+        "last_purchase_date": "2024-12-14",
+        "nearest_store": "Kolkata Park Street"
+    },
+    {
+        "customer_id": 114,
+        "name": "Customer 114",
+        "age": 34,
+        "membership": "Gold",
+        "purchases_last_6_months": 16,
+        "total_spent": 25670.23,
+        "preferred_category": "Groceries",
+        "last_purchase_date": "2025-02-10",
+        "nearest_store": "Bangalore Whitefield"
+    },
+    {
+        "customer_id": 115,
+        "name": "Customer 115",
+        "age": 58,
+        "membership": "Platinum",
+        "purchases_last_6_months": 11,
+        "total_spent": 5586.27,
+        "preferred_category": "Home Appliances",
+        "last_purchase_date": "2024-11-25",
+        "nearest_store": "Bangalore Whitefield"
+    },
+    {
+        "customer_id": 116,
+        "name": "Customer 116",
+        "age": 54,
+        "membership": "Platinum",
+        "purchases_last_6_months": 21,
+        "total_spent": 29286.23,
+        "preferred_category": "Fashion",
+        "last_purchase_date": "2024-11-08",
+        "nearest_store": "Kolkata Park Street"
+    },
+    {
+        "customer_id": 117,
+        "name": "Customer 117",
+        "age": 28,
+        "membership": "Platinum",
+        "purchases_last_6_months": 5,
+        "total_spent": 15503.73,
+        "preferred_category": "Automotive",
+        "last_purchase_date": "2024-08-17",
+        "nearest_store": "Hyderabad Banjara Hills"
+    }
+]

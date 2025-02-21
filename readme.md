@@ -20,6 +20,10 @@
    5. Query Processing →  Weaviate
    6. Result Delivery → Flask API
 
+   ## Architecture
+![Architectural Flow](download.png)
+
+
    ## Setup Instructions
 
    ### Prerequisites
@@ -89,11 +93,18 @@ Content-Type: application/json
 {
     "query": "your search query",
     "document_name": "document.pdf",
-    "limit": 3
+    "limit": 3,
+    "similarity_threshold": 0.7,
+    "include_metadata": true
 }
 ```
-- Performs semantic search within a specific document
-- Returns relevant text chunks with relevance scores
+- Performs semantic search within a specific document using RAG (Retrieval-Augmented Generation)
+- Retrieves relevant text chunks based on semantic similarity
+- Supports natural language queries
+- Optional parameters:
+  - `limit`: Maximum number of results to return (default: 3)
+  - `similarity_threshold`: Minimum similarity score for results (default: 0.7)
+  - `include_metadata`: Include document metadata in response (default: true)
 
 **Response:**
 ```json
@@ -102,15 +113,42 @@ Content-Type: application/json
         {
             "content": "matching text chunk",
             "chunk_index": 1,
-            "relevance_score": 0.95
+            "relevance_score": 0.95,
+            "page_number": 1,
+            "metadata": {
+                "source": "document.pdf",
+                "chunk_type": "text",
+                "created_at": "2025-02-21T07:45:23Z"
+            }
         }
     ],
     "document_info": {
         "documentId": "doc-uuid",
         "fileName": "document.pdf",
         "processed_at": "2025-02-20T14:44:41.376936",
-        "chunk_count": "5"
+        "chunk_count": "5",
+        "total_pages": 10,
+        "file_type": "pdf"
+    },
+    "query_stats": {
+        "processing_time_ms": 156,
+        "total_matches": 3
     }
+}
+```
+
+**Error Responses:**
+```json
+// Document not found
+{
+    "error": "Document 'document.pdf' not found",
+    "status": 404
+}
+
+// Invalid query
+{
+    "error": "Query string cannot be empty",
+    "status": 400
 }
 ```
 

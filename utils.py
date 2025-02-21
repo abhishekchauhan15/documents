@@ -26,6 +26,8 @@ from config import (
     CHUNK_OVERLAP,
     WEAVIATE_URL
 )
+import json
+from langchain.schema import Document
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -77,12 +79,35 @@ class WeaviateHelper:
         if cls._client:
             cls._client = None
 
+class JsonLoader:
+    """Custom loader for JSON files."""
+    def __init__(self, file_path):
+        self.file_path = file_path
+
+    def load(self) -> List[Any]:
+        """Load JSON content and convert it to documents."""
+        try:
+            with open(self.file_path, 'r', encoding='utf-8') as file:
+                json_data = json.loads(file.read())
+                
+            # Convert JSON to string representation
+            if isinstance(json_data, (dict, list)):
+                # Pretty print JSON for better readability
+                content = json.dumps(json_data, indent=2)
+            else:
+                content = str(json_data)
+                
+            # Create a document with the JSON content
+            return [Document(page_content=content, metadata={"source": self.file_path})]
+        except Exception as e:
+            logger.error(f"Error loading JSON file: {str(e)}")
+            raise
+
 class IndexingHelper:
     def __init__(self, redis_url: str):
         """Initialize the IndexingHelper with Redis and document processing components."""
         try:
             self.redis_client = redis.from_url(redis_url)
-            # Test Redis connection
             self.redis_client.ping()
             logger.info("Successfully connected to Redis")
         except Exception as e:
@@ -97,7 +122,7 @@ class IndexingHelper:
             'txt': TextLoader,
             'pdf': PyPDFLoader,
             'docx': Docx2txtLoader,
-            'json': TextLoader  # JSON files are treated as text
+            'json': JsonLoader
         }
         
         # Initialize text splitter with configurable parameters
@@ -114,15 +139,30 @@ class IndexingHelper:
         )
 
     def _clean_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Clean metadata to ensure property names are valid for Weaviate."""
-        cleaned = {}
+        """Clean metadata to ensure property names are valid for Weaviate GraphQL."""
+        cleaned = {
+            'documentId': metadata.get('documentId', ''),
+            'fileName': metadata.get('fileName', ''),
+            'chunkIndex': metadata.get('chunkIndex', 0),
+            'processedAt': metadata.get('processedAt', datetime.datetime.now(datetime.UTC).isoformat())
+        }
+        
+        # Store all other metadata as a JSON string in metaData field
+        other_metadata = {}
         for key, value in metadata.items():
-            # Replace dots and other invalid characters with underscores
-            clean_key = key.replace('.', '_').replace('-', '_')
-            # Ensure key starts with a letter or underscore
-            if not clean_key[0].isalpha() and clean_key[0] != '_':
-                clean_key = f'_{clean_key}'
-            cleaned[clean_key] = value
+            if key not in cleaned:
+                # Clean the key name
+                clean_key = ''.join(c if c.isalnum() else '_' for c in str(key))
+                clean_key = clean_key.strip('_')
+                if not clean_key[0].isalpha():
+                    clean_key = 'f_' + clean_key
+                other_metadata[clean_key] = str(value)
+        
+        if other_metadata:
+            cleaned['metaData'] = json.dumps(other_metadata)
+        else:
+            cleaned['metaData'] = '{}'
+            
         return cleaned
 
     def initialize_vector_store(self, weaviate_client: Any):
@@ -134,7 +174,7 @@ class IndexingHelper:
                 schema = {
                     "class": "Document",
                     "description": "A document chunk with its embeddings",
-                    "vectorizer": "none",  # We'll provide vectors ourselves
+                    "vectorizer": "none",
                     "properties": [
                         {
                             "name": "content",
@@ -162,8 +202,14 @@ class IndexingHelper:
                         },
                         {
                             "name": "processedAt",
-                            "dataType": ["text"],
+                            "dataType": ["date"],
                             "description": "Timestamp when this chunk was processed",
+                            "indexInverted": True
+                        },
+                        {
+                            "name": "metaData",
+                            "dataType": ["text"],
+                            "description": "JSON string of additional metadata",
                             "indexInverted": True
                         }
                     ]
@@ -178,7 +224,7 @@ class IndexingHelper:
                 text_key="content",
                 embedding=self.embeddings,
                 by_text=False,
-                attributes=["documentId", "fileName", "chunkIndex", "processedAt"]
+                attributes=["documentId", "fileName", "chunkIndex", "processedAt", "metaData"]
             )
             logger.info("Vector store initialized successfully")
             
@@ -188,6 +234,101 @@ class IndexingHelper:
                 
         except Exception as e:
             logger.error(f"Failed to initialize vector store: {str(e)}")
+            raise
+
+    def process_document(self, file_path: str, weaviate_client: Any, embedding_model: OllamaEmbeddings = None):
+        """Process and index a document."""
+        try:
+            file_extension = Path(file_path).suffix.lower()[1:]
+            document_id = str(uuid.uuid4()) 
+            document_name = Path(file_path).name
+            
+            logger.info(f"Processing document: {document_name} with ID: {document_id}")
+            
+            # Initialize vector store first if needed
+            if self._vector_store is None or not hasattr(self._vector_store, 'similarity_search'):
+                self.initialize_vector_store(weaviate_client)
+
+            if self._vector_store is None or not hasattr(self._vector_store, 'similarity_search'):
+                raise Exception("Vector store initialization failed")
+            
+            # Now check for existing document with same name
+            existing_docs = self._vector_store.similarity_search(
+                document_name,
+                filter={
+                    "operator": "Equal",
+                    "path": ["fileName"],
+                    "valueString": document_name
+                },
+                k=1
+            )
+            if existing_docs:
+                old_doc_id = existing_docs[0].metadata.get('documentId')
+                if old_doc_id:
+                    logger.info(f"Found existing document with name {document_name}, deleting it first...")
+                    self._vector_store.delete(
+                        where_filter={
+                            "path": ["documentId"],
+                            "operator": "Equal",
+                            "valueString": old_doc_id
+                        }
+                    )
+            
+            # Store document metadata in Redis
+            metadata = {
+                'document_name': document_name,
+                'document_id': document_id,
+                'file_path': file_path,
+                'timestamp': datetime.datetime.now(datetime.UTC).isoformat()
+            }
+            self.redis_client.hset(f"document:{document_id}", mapping=metadata)
+            
+            # Get appropriate loader
+            if file_extension not in self.loaders:
+                raise ValueError(f"Unsupported file type: {file_extension}")
+            
+            loader_class = self.loaders[file_extension]
+            loader = loader_class(file_path)
+            
+            # Load and split the document
+            documents = loader.load()
+            chunks = self.text_splitter.split_documents(documents)
+            
+            logger.info(f"Split document into {len(chunks)} chunks")
+            
+            # Add document_id to metadata of each chunk and clean metadata
+            for i, chunk in enumerate(chunks):
+                # First clean any existing metadata
+                chunk.metadata.update({
+                    'documentId': document_id,
+                    'fileName': document_name,
+                    'chunkIndex': i,
+                    'processedAt': datetime.datetime.now(datetime.UTC).isoformat()
+                })
+                chunk.metadata = self._clean_metadata(chunk.metadata)
+            
+            # Store document chunks in Weaviate using class embeddings
+            self._vector_store.add_documents(chunks)
+            
+            # Verify documents were added by doing a test query
+            test_results = self._vector_store.similarity_search(
+                "test",
+                filter={
+                    "operator": "Equal",
+                    "path": ["documentId"],
+                    "valueString": document_id
+                },
+                k=1
+            )
+            
+            if not test_results:
+                raise Exception("Failed to verify document indexing - no results found")
+            
+            logger.info(f"Successfully processed document: {document_name} with ID: {document_id}")
+            return {'document_id': document_id, 'status': 'success'}
+            
+        except Exception as e:
+            logger.error(f"Error processing document: {str(e)}")
             raise
 
     def query_document(self, query: str, document_id: str, limit: int = 3):
@@ -209,84 +350,74 @@ class IndexingHelper:
             if self._vector_store is None or not hasattr(self._vector_store, 'similarity_search'):
                 raise Exception("Vector store initialization failed")
 
-            # Query Weaviate with document_id filter
-            results = self._vector_store.similarity_search(
-                query,
-                filter={"path": ["documentId"], "operator": "Equal", "valueString": document_id},
-                k=limit
+            logger.info(f"Querying document with ID: {document_id}")
+            
+            # First verify the document exists in Weaviate
+            verify_results = self._vector_store.similarity_search(
+                "test",  # Simple query to check existence
+                filter={
+                    "operator": "Equal",
+                    "path": ["documentId"],
+                    "valueString": document_id
+                },
+                k=1
             )
             
-            return {
+            if not verify_results:
+                logger.warning(f"Document {document_id} not found in vector store. It may have been deleted.")
+                raise ValueError(f"Document {document_id} not found in vector store")
+            
+            # Query Weaviate with document_id filter
+            results = self._vector_store.similarity_search_with_score(
+                query,
+                k=limit,
+                filter={
+                    "operator": "Equal",
+                    "path": ["documentId"],
+                    "valueString": document_id
+                }
+            )
+            
+            # Log the results for debugging
+            logger.info(f"Found {len(results)} results")
+            for doc, score in results:
+                logger.info(f"Score: {score}, Content: {doc.page_content[:100]}...")
+            
+            # Format the response
+            response = {
                 'document_id': document_id,
                 'document_name': doc_metadata.get(b'document_name', b'').decode('utf-8'),
-                'results': [
-                    {
-                        'content': doc.page_content,
-                        'metadata': {
-                            'documentId': doc.metadata.get('documentId'),
-                            'fileName': doc.metadata.get('fileName'),
-                            'chunkIndex': doc.metadata.get('chunkIndex'),
-                            'processedAt': doc.metadata.get('processedAt')
-                        }
-                    } for doc in results
-                ]
+                'results': []
             }
+            
+            for doc, score in results:
+                # Extract the metadata we want to return
+                metadata = doc.metadata
+                result = {
+                    'content': doc.page_content,
+                    'metadata': {
+                        'document_id': metadata.get('documentId'),
+                        'file_name': metadata.get('fileName'),
+                        'chunk_index': metadata.get('chunkIndex'),
+                        'processed_at': metadata.get('processedAt'),
+                        'score': float(score)
+                    }
+                }
+                
+                # Add any additional metadata if present
+                if 'metaData' in metadata:
+                    try:
+                        extra_metadata = json.loads(metadata['metaData'])
+                        result['metadata']['extra'] = extra_metadata
+                    except json.JSONDecodeError:
+                        pass
+                
+                response['results'].append(result)
+            
+            return response
             
         except Exception as e:
             logger.error(f"Error querying document: {str(e)}")
-            raise
-
-    def process_document(self, file_path: str, weaviate_client: Any, embedding_model: OllamaEmbeddings = None):
-        """Process and index a document."""
-        try:
-            file_extension = Path(file_path).suffix.lower()[1:]
-            document_id = str(uuid.uuid4())  # Generate a unique document ID
-            document_name = Path(file_path).name
-            
-            # Store document metadata in Redis
-            metadata = {
-                'document_name': document_name,
-                'document_id': document_id,
-                'file_path': file_path,
-                'timestamp': datetime.datetime.now().isoformat()
-            }
-            self.redis_client.hset(f"document:{document_id}", mapping=metadata)
-            
-            # Get appropriate loader
-            if file_extension not in self.loaders:
-                raise ValueError(f"Unsupported file type: {file_extension}")
-            
-            loader_class = self.loaders[file_extension]
-            loader = loader_class(file_path)
-            
-            # Load and split the document
-            documents = loader.load()
-            chunks = self.text_splitter.split_documents(documents)
-            
-            # Add document_id to metadata of each chunk and clean metadata
-            for i, chunk in enumerate(chunks):
-                chunk.metadata.update({
-                    'documentId': document_id,
-                    'fileName': document_name,
-                    'chunkIndex': i,
-                    'processedAt': datetime.datetime.now().isoformat()
-                })
-            
-            # Initialize vector store if needed
-            if self._vector_store is None or not hasattr(self._vector_store, 'similarity_search'):
-                self.initialize_vector_store(weaviate_client)
-
-            if self._vector_store is None or not hasattr(self._vector_store, 'similarity_search'):
-                raise Exception("Vector store initialization failed")
-            
-            # Store document chunks in Weaviate using class embeddings
-            self._vector_store.add_documents(chunks)
-            
-            logger.info(f"Successfully processed document: {document_name} with ID: {document_id}")
-            return {'document_id': document_id, 'status': 'success'}
-            
-        except Exception as e:
-            logger.error(f"Error processing document: {str(e)}")
             raise
 
 class PerformanceMonitor:
