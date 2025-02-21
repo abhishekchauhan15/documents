@@ -2,6 +2,10 @@
 
    A robust Retrieval-Augmented Generation (RAG) system for document processing and querying using  Weaviate, and Ollama.
 
+   Watch the demo video here:  
+   [![Demo Video](https://img.shields.io/badge/Watch%20Demo-Click%20Here-blue?style=for-the-badge&logo=youtube)](https://drive.google.com/file/d/1BDpfpytyH9E4-BcGO1nH0A8IxYlniRlf/view?usp=sharing)
+
+
    ## System Architecture
 
    ### Components
@@ -63,7 +67,8 @@
 
 ## API Documentation
 
-### Document Operations
+Postman collection 
+[<img src="https://run.pstmn.io/button.svg" alt="Run In Postman" style="width: 128px; height: 32px;">](https://app.getpostman.com/run-collection/24775685-2d233f91-c218-43be-94c7-393f1ee8a05c?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D24775685-2d233f91-c218-43be-94c7-393f1ee8a05c%26entityType%3Dcollection%26workspaceId%3Df94b8169-d58e-438f-9385-772ad6bb3c12)
 
 #### 1. Upload Document
 ```http
