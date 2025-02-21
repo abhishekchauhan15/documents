@@ -1,6 +1,6 @@
    # Document RAG System
 
-   A robust Retrieval-Augmented Generation (RAG) system for document processing and querying using LlamaIndex, Weaviate, and Ollama.
+   A robust Retrieval-Augmented Generation (RAG) system for document processing and querying using  Weaviate, and Ollama.
 
    ## System Architecture
 
@@ -10,7 +10,6 @@
    - **Redis**: Message broker and result backend for Celery
    - **Weaviate**: Vector database for storing document embeddings
    - **Ollama**: Local LLM for generating embeddings
-   - **LlamaIndex**: Document processing and retrieval framework
 
    ### Workflow
    1. Document Upload → Flask API
